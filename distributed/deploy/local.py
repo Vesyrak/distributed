@@ -3,8 +3,10 @@ from __future__ import annotations
 import logging
 import math
 import warnings
+from typing import Any
 
 import toolz
+from tornado.ioloop import IOLoop
 
 from dask.system import CPU_COUNT
 from dask.widgets import get_template
@@ -112,31 +114,31 @@ class LocalCluster(SpecCluster):
 
     def __init__(
         self,
-        name=None,
-        n_workers=None,
-        threads_per_worker=None,
-        processes=None,
-        loop=None,
-        start=None,
-        host=None,
-        ip=None,
-        scheduler_port=0,
-        silence_logs=logging.WARN,
-        dashboard_address=":8787",
-        worker_dashboard_address=None,
-        diagnostics_port=None,
-        services=None,
-        worker_services=None,
-        service_kwargs=None,
-        asynchronous=False,
-        security=None,
-        protocol=None,
-        blocked_handlers=None,
-        interface=None,
-        worker_class=None,
-        scheduler_kwargs=None,
-        scheduler_sync_interval=1,
-        **worker_kwargs,
+        name: str | None = None,
+        n_workers: int | None = None,
+        threads_per_worker: int | None = None,
+        processes: int | None = None,
+        loop: IOLoop | None = None,
+        start: None = None,
+        host: str | None = None,
+        ip: str | None = None,
+        scheduler_port: int = 0,
+        silence_logs: int | None = logging.WARN,
+        dashboard_address: str = ":8787",
+        worker_dashboard_address: str | None = None,
+        diagnostics_port: str | None = None,
+        services: dict | None = None,
+        worker_services: dict | None = None,
+        service_kwargs: dict | None = None,
+        asynchronous: bool = False,
+        security: Security | bool | None = None,
+        protocol: str | None = None,
+        blocked_handlers: list[str] | None = None,
+        interface: str | None = None,
+        worker_class: type[Worker] | type[Nanny] | None = None,
+        scheduler_kwargs: dict | None = None,
+        scheduler_sync_interval: int = 1,
+        **worker_kwargs: Any,
     ):
         if ip is not None:
             # In the future we should warn users about this move
@@ -262,13 +264,13 @@ class LocalCluster(SpecCluster):
             scheduler_sync_interval=scheduler_sync_interval,
         )
 
-    def start_worker(self, *args, **kwargs):
+    def start_worker(self, *args: Any, **kwargs: Any) -> None:
         raise NotImplementedError(
             "The `cluster.start_worker` function has been removed. "
             "Please see the `cluster.scale` method instead."
         )
 
-    def _repr_html_(self, cluster_status=None):
+    def _repr_html_(self, cluster_status: str | None = None) -> str:
         cluster_status = get_template("local_cluster.html.j2").render(
             status=self.status.name,
             processes=self.processes,

@@ -9,9 +9,11 @@ import warnings
 from queue import Queue
 from threading import Thread
 from time import sleep
+from typing import Any
 
 from tlz import merge
 from tornado import gen
+from typing_extensions import Self
 
 from distributed.metrics import time
 
@@ -31,7 +33,7 @@ class bcolors:
     UNDERLINE = "\033[4m"
 
 
-def async_ssh(cmd_dict):
+def async_ssh(cmd_dict: dict) -> None:
     import paramiko
     from paramiko.buffered_pipe import PipeTimeout
     from paramiko.ssh_exception import PasswordRequiredException, SSHException
@@ -121,7 +123,7 @@ def async_ssh(cmd_dict):
     channel = stdout.channel
     channel.settimeout(0.1)
 
-    def read_from_stdout():
+    def read_from_stdout() -> None:
         """
         Read stdout stream, time out if necessary.
         """
@@ -139,7 +141,7 @@ def async_ssh(cmd_dict):
         except (PipeTimeout, socket.timeout):
             pass
 
-    def read_from_stderr():
+    def read_from_stderr() -> None:
         """
         Read stderr stream, time out if necessary.
         """
@@ -158,7 +160,7 @@ def async_ssh(cmd_dict):
         except (PipeTimeout, socket.timeout):
             pass
 
-    def communicate():
+    def communicate() -> bool:
         """
         Communicate a little bit, without blocking too long.
         Return True if the command ended.
@@ -178,6 +180,7 @@ def async_ssh(cmd_dict):
                 + bcolors.ENDC
             )
             return True
+        return False
 
     # Get transport to current SSH client
     transport = ssh.get_transport()
@@ -206,8 +209,14 @@ def async_ssh(cmd_dict):
 
 
 def start_scheduler(
-    logdir, addr, port, ssh_username, ssh_port, ssh_private_key, remote_python=None
-):
+    logdir: str,
+    addr: str,
+    port: str,
+    ssh_username: str,
+    ssh_port: str,
+    ssh_private_key: str,
+    remote_python: None = None,
+) -> dict[str, Any]:
     cmd = "{python} -m distributed.cli.dask_scheduler --port {port}".format(
         python=remote_python or sys.executable, port=port
     )
@@ -225,8 +234,8 @@ def start_scheduler(
 
     # Create a command dictionary, which contains everything we need to run and
     # interact with this command.
-    input_queue = Queue()
-    output_queue = Queue()
+    input_queue: Queue = Queue()
+    output_queue: Queue = Queue()
     cmd_dict = {
         "cmd": cmd,
         "label": label,
@@ -248,23 +257,23 @@ def start_scheduler(
 
 
 def start_worker(
-    logdir,
-    scheduler_addr,
-    scheduler_port,
-    worker_addr,
-    nthreads,
-    n_workers,
-    ssh_username,
-    ssh_port,
-    ssh_private_key,
-    nohost,
-    memory_limit,
-    worker_port,
-    nanny_port,
-    remote_python=None,
-    remote_dask_worker="distributed.cli.dask_worker",
-    local_directory=None,
-):
+    logdir: str,
+    scheduler_addr: str,
+    scheduler_port: str,
+    worker_addr: str,
+    nthreads: int,
+    n_workers: int,
+    ssh_username: str,
+    ssh_port: str,
+    ssh_private_key: str,
+    nohost: bool,
+    memory_limit: int,
+    worker_port: str,
+    nanny_port: str,
+    remote_python: None = None,
+    remote_dask_worker: str = "distributed.cli.dask_worker",
+    local_directory: str | None = None,
+) -> dict[str, Any]:
     cmd = (
         "{python} -m {remote_dask_worker} "
         "{scheduler_addr}:{scheduler_port} "
@@ -312,8 +321,8 @@ def start_worker(
 
     # Create a command dictionary, which contains everything we need to run and
     # interact with this command.
-    input_queue = Queue()
-    output_queue = Queue()
+    input_queue: Queue = Queue()
+    output_queue: Queue = Queue()
     cmd_dict = {
         "cmd": cmd,
         "label": label,
@@ -429,11 +438,11 @@ class SSHCluster:
             self.add_worker(addr)
 
     @gen.coroutine
-    def _start(self):
+    def _start(self) -> None:
         pass
 
     @property
-    def nprocs(self):
+    def nprocs(self) -> int:
         warnings.warn(
             "The nprocs attribute will be removed in a future release. It has been "
             "renamed to n_workers.",
@@ -442,7 +451,7 @@ class SSHCluster:
         return self.n_workers
 
     @nprocs.setter
-    def nprocs(self, value):
+    def nprocs(self, value: int) -> None:
         warnings.warn(
             "The nprocs attribute will be removed in a future release. It has been "
             "renamed to n_workers.",
@@ -451,10 +460,10 @@ class SSHCluster:
         self.n_workers = value
 
     @property
-    def scheduler_address(self):
+    def scheduler_address(self) -> str:
         return "%s:%d" % (self.scheduler_addr, self.scheduler_port)
 
-    def monitor_remote_processes(self):
+    def monitor_remote_processes(self) -> None:
         # Form a list containing all processes, since we treat them equally from here on out.
         all_processes = [self.scheduler] + self.workers
 
@@ -473,7 +482,7 @@ class SSHCluster:
         except KeyboardInterrupt:
             pass  # Return execution to the calling process
 
-    def add_worker(self, address):
+    def add_worker(self, address: str) -> None:
         self.workers.append(
             start_worker(
                 self.logdir,
@@ -495,15 +504,15 @@ class SSHCluster:
             )
         )
 
-    def shutdown(self):
+    def shutdown(self) -> None:
         all_processes = [self.scheduler] + self.workers
 
         for process in all_processes:
             process["input_queue"].put("shutdown")
             process["thread"].join()
 
-    def __enter__(self):
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback):
+    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
         self.shutdown()

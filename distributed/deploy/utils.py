@@ -13,7 +13,7 @@ def _factors(n: int) -> set[int]:
     return {j for item in seq for j in item}
 
 
-def nprocesses_nthreads(n=CPU_COUNT):
+def nprocesses_nthreads(n: int = CPU_COUNT) -> tuple[int, int]:
     """
     The default breakdown of processes and threads for a given number of cores
 

@@ -193,6 +193,7 @@ warn_unreachable = true
 # Also look for 'mypy: disable-error-code' at the top of modules
 module = ["distributed.client", "distributed.worker"]
 allow_incomplete_defs = true
+ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 # Recent or recently overhauled modules featuring stricter validation
@@ -210,6 +211,7 @@ allow_untyped_defs = false
 [[tool.mypy.overrides]]
 module = ["distributed.shuffle.tests.*"]
 allow_untyped_defs = true
+ignore_missing_imports = true
 
 [tool.codespell]
 ignore-words-list = "statics"

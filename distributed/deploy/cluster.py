@@ -6,20 +6,25 @@ import logging
 import uuid
 import warnings
 from contextlib import suppress
-from typing import Any
+from typing import Any, Awaitable, Callable, Generator, Hashable
 
+from ipywidgets import Tab
 from packaging.version import parse as parse_version
 from tornado.ioloop import IOLoop
+from typing_extensions import Self, TypeAlias
 
 import dask.config
 from dask.utils import _deprecated, format_bytes, parse_timedelta, typename
 from dask.widgets import get_template
 
+from distributed.client import Client
 from distributed.compatibility import PeriodicCallback
-from distributed.core import Status
+from distributed.core import Status, rpc
 from distributed.deploy.adaptive import Adaptive
+from distributed.deploy.spec import ProcessInterface
 from distributed.metrics import time
 from distributed.objects import SchedulerInfo
+from distributed.scheduler import Scheduler, WorkerState
 from distributed.utils import (
     Log,
     Logs,
@@ -32,8 +37,11 @@ from distributed.utils import (
 
 logger = logging.getLogger(__name__)
 
+WorkerName: TypeAlias = Hashable
+
 
 class Cluster(SyncMethodMixin):
+    workers: dict[WorkerName, ProcessInterface]
     """Superclass for cluster objects
 
     This class contains common functionality for Dask Cluster manager classes.
@@ -56,41 +64,45 @@ class Cluster(SyncMethodMixin):
     6.  Methods to gather logs
     """
 
-    _supports_scaling = True
+    @property
+    def _supports_scaling(self) -> bool:
+        return True
+
     __loop: IOLoop | None = None
 
     def __init__(
         self,
-        asynchronous=False,
-        loop=None,
-        quiet=False,
-        name=None,
-        scheduler_sync_interval=1,
+        asynchronous: bool = False,
+        loop: IOLoop | None = None,
+        quiet: bool = False,
+        name: Any = None,
+        scheduler_sync_interval: int = 1,
     ):
         self._loop_runner = LoopRunner(loop=loop, asynchronous=asynchronous)
         self.__asynchronous = asynchronous
 
-        self.scheduler_info = {"workers": {}}
-        self.periodic_callbacks = {}
-        self._watch_worker_status_comm = None
-        self._watch_worker_status_task = None
-        self._cluster_manager_logs = []
+        self.scheduler_info: dict[str, dict[str, Any]] = {"workers": {}}
+        self.periodic_callbacks: dict[str, PeriodicCallback] = {}
+        self._watch_worker_status_comm: rpc | None = None
+        self._watch_worker_status_task: asyncio.Task[None] | None = None
+        self._cluster_manager_logs: list[tuple[datetime.datetime, str]] = []
         self.quiet = quiet
         self.scheduler_comm = None
-        self._adaptive = None
+        self._adaptive: Adaptive | None = None
         self._sync_interval = parse_timedelta(
             scheduler_sync_interval, default="seconds"
         )
-        self._sync_cluster_info_task = None
+        self._sync_cluster_info_task: asyncio.Task[None] | None = None
+        self._cached_widget: Tab | None = None
 
         if name is None:
             name = str(uuid.uuid4())[:8]
 
-        self._cluster_info = {
+        self._cluster_info: dict[str, Any] = {
             "name": name,
             "type": typename(type(self)),
         }
-        self.status = Status.created
+        self.status: Status | None = Status.created
 
     @property
     def loop(self) -> IOLoop | None:
@@ -113,7 +125,7 @@ class Cluster(SyncMethodMixin):
         self.__loop = value
 
     @property
-    def called_from_running_loop(self):
+    def called_from_running_loop(self) -> bool:
         try:
             return (
                 getattr(self.loop, "asyncio_loop", None) is asyncio.get_running_loop()
@@ -122,14 +134,14 @@ class Cluster(SyncMethodMixin):
             return self.__asynchronous
 
     @property
-    def name(self):
+    def name(self) -> str:
         return self._cluster_info["name"]
 
     @name.setter
-    def name(self, name):
+    def name(self, name: str) -> None:
         self._cluster_info["name"] = name
 
-    async def _start(self):
+    async def _start(self) -> None:
         comm = await self.scheduler_comm.live_comm()
         comm.name = "Cluster worker status"
         await comm.write({"op": "subscribe_worker_status"})
@@ -151,7 +163,7 @@ class Cluster(SyncMethodMixin):
             pc.start()
         self.status = Status.running
 
-    async def _sync_cluster_info(self):
+    async def _sync_cluster_info(self) -> None:
         err_count = 0
         warn_at = 5
         max_interval = 10 * self._sync_interval
@@ -185,7 +197,7 @@ class Cluster(SyncMethodMixin):
             )
             await asyncio.sleep(interval)
 
-    async def _close(self):
+    async def _close(self) -> None:
         if self.status == Status.closed:
             return
 
@@ -224,7 +236,7 @@ class Cluster(SyncMethodMixin):
         except RuntimeError:  # loop closed during process shutdown
             return None
 
-    def __del__(self, _warn=warnings.warn):
+    def __del__(self, _warn: Callable = warnings.warn) -> None:
         if getattr(self, "status", Status.closed) != Status.closed:
             try:
                 self_r = repr(self)
@@ -232,7 +244,7 @@ class Cluster(SyncMethodMixin):
                 self_r = f"with a broken __repr__ {object.__repr__(self)}"
             _warn(f"unclosed cluster {self_r}", ResourceWarning, source=self)
 
-    async def _watch_worker_status(self, comm):
+    async def _watch_worker_status(self, comm: rpc) -> None:
         """Listen to scheduler for updates on adding and removing workers"""
         while True:
             try:
@@ -246,7 +258,7 @@ class Cluster(SyncMethodMixin):
 
         await comm.close()
 
-    def _update_worker_status(self, op, msg):
+    def _update_worker_status(self, op: str, msg: dict[str, Any]) -> None:
         if op == "add":
             workers = msg.pop("workers")
             self.scheduler_info["workers"].update(workers)
@@ -273,7 +285,7 @@ class Cluster(SyncMethodMixin):
         self._adaptive = Adaptive(self, **self._adaptive_options)
         return self._adaptive
 
-    def scale(self, n: int) -> None:
+    def scale(self, n: int) -> None | Awaitable:
         """Scale cluster to n workers
 
         Parameters
@@ -287,7 +299,7 @@ class Cluster(SyncMethodMixin):
         """
         raise NotImplementedError()
 
-    def _log(self, log):
+    def _log(self, log: str) -> None:
         """Log a message.
 
         Output a message to the user and also store for future retrieval.
@@ -303,7 +315,9 @@ class Cluster(SyncMethodMixin):
         if not self.quiet:
             print(log)
 
-    async def _get_logs(self, cluster=True, scheduler=True, workers=True):
+    async def _get_logs(
+        self, cluster: bool = True, scheduler: bool = True, workers: bool | None = True
+    ) -> Logs:
         logs = Logs()
 
         if cluster:
@@ -324,7 +338,9 @@ class Cluster(SyncMethodMixin):
 
         return logs
 
-    def get_logs(self, cluster=True, scheduler=True, workers=True):
+    def get_logs(
+        self, cluster: bool = True, scheduler: bool = True, workers: bool = True
+    ) -> Logs:
         """Return logs for the cluster, scheduler and workers
 
         Parameters
@@ -347,11 +363,11 @@ class Cluster(SyncMethodMixin):
             self._get_logs, cluster=cluster, scheduler=scheduler, workers=workers
         )
 
-    @_deprecated(use_instead="get_logs")
-    def logs(self, *args, **kwargs):
+    @_deprecated(use_instead="get_logs")  # type:ignore
+    def logs(self, *args: Any, **kwargs: Any) -> Logs:
         return self.get_logs(*args, **kwargs)
 
-    def get_client(self):
+    def get_client(self) -> Client:
         """Return client for the cluster
 
         If a client has already been initialized for the cluster, return that
@@ -368,7 +384,7 @@ class Cluster(SyncMethodMixin):
         return Client(self)
 
     @property
-    def dashboard_link(self):
+    def dashboard_link(self) -> str:
         try:
             port = self.scheduler_info["services"]["dashboard"]
         except KeyError:
@@ -377,7 +393,7 @@ class Cluster(SyncMethodMixin):
             host = self.scheduler_address.split("://")[1].split("/")[0].split(":")[0]
             return format_dashboard_link(host, port)
 
-    def _scaling_status(self):
+    def _scaling_status(self) -> str:
         if self._adaptive and self._adaptive.periodic_callback:
             mode = "Adaptive"
         else:
@@ -401,7 +417,7 @@ class Cluster(SyncMethodMixin):
         </table>
         """
 
-    def _widget(self):
+    def _widget(self) -> Tab:
         """Create IPython widget for display within a notebook"""
         try:
             return self._cached_widget
@@ -450,7 +466,7 @@ class Cluster(SyncMethodMixin):
             adapt.on_click(adapt_cb)
 
             @log_errors
-            def scale_cb(b):
+            def scale_cb(b: Any) -> None:
                 n = request.value
                 with suppress(AttributeError):
                     self._adaptive.stop()
@@ -470,7 +486,7 @@ class Cluster(SyncMethodMixin):
 
         self._cached_widget = tab
 
-        def update():
+        def update() -> None:
             status.value = self._repr_html_()
             scale_status.value = self._scaling_status()
 
@@ -478,7 +494,7 @@ class Cluster(SyncMethodMixin):
             dask.config.get("distributed.deploy.cluster-repr-interval", default="ms")
         )
 
-        def install():
+        def install() -> None:
             pc = PeriodicCallback(update, cluster_repr_interval * 1000)
             self.periodic_callbacks["cluster-repr"] = pc
             pc.start()
@@ -486,7 +502,7 @@ class Cluster(SyncMethodMixin):
         self.loop.add_callback(install)
         return tab
 
-    def _repr_html_(self, cluster_status=None):
+    def _repr_html_(self, cluster_status: str | None = None) -> str:
         try:
             scheduler_info_repr = self.scheduler_info._repr_html_()
         except AttributeError:
@@ -501,7 +517,7 @@ class Cluster(SyncMethodMixin):
             cluster_status=cluster_status,
         )
 
-    def _ipython_display_(self, **kwargs):
+    def _ipython_display_(self, **kwargs: Any) -> None:
         """Display the cluster rich IPython repr"""
         # Note: it would be simpler to just implement _repr_mimebundle_,
         # but we cannot do that until we drop ipywidgets 7 support, as
@@ -525,7 +541,7 @@ class Cluster(SyncMethodMixin):
             mimebundle = {"text/plain": repr(self), "text/html": self._repr_html_()}
             display(mimebundle, raw=True)
 
-    def __enter__(self):
+    def __enter__(self) -> None:
         if self.asynchronous:
             raise TypeError(
                 "Used 'with' with asynchronous class; please use 'async with'"
@@ -533,19 +549,18 @@ class Cluster(SyncMethodMixin):
 
         return self.sync(self.__aenter__)
 
-    def __exit__(self, exc_type, exc_value, traceback):
+    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
         aw = self.close()
         assert aw is None, aw
 
-    def __await__(self):
-        return self
-        yield
+    def __await__(self) -> Generator[Any, None, Self]:
+        return self  # type:ignore
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> Generator[Any, None, Any]:
         await self
         return self
 
-    async def __aexit__(self, exc_type, exc_value, traceback):
+    async def __aexit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
         await self._close()
 
     @property
@@ -555,10 +570,10 @@ class Cluster(SyncMethodMixin):
         return self.scheduler_comm.address
 
     @property
-    def _cluster_class_name(self):
+    def _cluster_class_name(self) -> str:
         return getattr(self, "_name", type(self).__name__)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         text = "%s(%s, %r, workers=%d, threads=%d" % (
             self._cluster_class_name,
             self.name,
@@ -575,31 +590,35 @@ class Cluster(SyncMethodMixin):
         return text
 
     @property
-    def plan(self):
+    def plan(self) -> set[WorkerName]:
         return set(self.workers)
 
     @property
-    def requested(self):
+    def requested(self) -> set[WorkerName]:
         return set(self.workers)
 
     @property
-    def observed(self):
+    def observed(self) -> set[WorkerState]:
         return {d["name"] for d in self.scheduler_info["workers"].values()}
 
-    def __eq__(self, other):
+    def __eq__(self, other: Any) -> bool:
         return type(other) == type(self) and self.name == other.name
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return id(self)
 
-    async def _wait_for_workers(self, n_workers=0, timeout=None):
+    async def _wait_for_workers(
+        self,
+        n_workers: int = 0,
+        timeout: str | float | datetime.timedelta | None = None,
+    ) -> None:
         self.scheduler_info = SchedulerInfo(await self.scheduler_comm.identity())
         if timeout:
             deadline = time() + parse_timedelta(timeout)
         else:
             deadline = None
 
-        def running_workers(info):
+        def running_workers(info: dict[str, Any]) -> int:
             return len(
                 [
                     ws

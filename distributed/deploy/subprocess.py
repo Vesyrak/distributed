@@ -80,7 +80,7 @@ class SubprocessScheduler(Subprocess):
         self.timeout = timeout
         super().__init__()
 
-    async def _start(self):
+    async def _start(self) -> None:
         cmd = [
             "dask",
             "spec",

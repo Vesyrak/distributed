@@ -334,7 +334,7 @@ class SyncMethodMixin:
     """
 
     @property
-    def asynchronous(self):
+    def asynchronous(self) -> bool:
         """Are we running in the event loop?"""
         try:
             return in_async_call(
@@ -343,7 +343,14 @@ class SyncMethodMixin:
         except RuntimeError:
             return False
 
-    def sync(self, func, *args, asynchronous=None, callback_timeout=None, **kwargs):
+    def sync(
+        self,
+        func,
+        *args,
+        asynchronous: bool | None = None,
+        callback_timeout: float | None = None,
+        **kwargs,
+    ):
         """Call `func` with `args` synchronously or asynchronously depending on
         the calling context"""
         callback_timeout = _parse_timedelta(callback_timeout)
@@ -360,7 +367,7 @@ class SyncMethodMixin:
             )
 
 
-def in_async_call(loop, default=False):
+def in_async_call(loop, default: bool = False) -> bool:
     """Whether this call is currently within an async call"""
     try:
         return loop.asyncio_loop is asyncio.get_running_loop()
@@ -1341,7 +1348,7 @@ def warn_on_duration(duration: str | float | timedelta, msg: str) -> Iterator[No
         warnings.warn(msg.format(duration=diff), stacklevel=2)
 
 
-def format_dashboard_link(host, port):
+def format_dashboard_link(host: str, port: str | int) -> str:
     template = dask.config.get("distributed.dashboard.link")
     if dask.config.get("distributed.scheduler.dashboard.tls.cert"):
         scheme = "https"

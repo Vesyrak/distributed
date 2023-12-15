@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 from inspect import isawaitable
+from typing import Any
 
 from tornado.ioloop import IOLoop
 
@@ -9,6 +11,7 @@ import dask.config
 from dask.utils import parse_timedelta
 
 from distributed.deploy.adaptive_core import AdaptiveCore
+from distributed.deploy.cluster import Cluster
 from distributed.protocol import pickle
 from distributed.utils import log_errors
 
@@ -83,16 +86,16 @@ class Adaptive(AdaptiveCore):
 
     def __init__(
         self,
-        cluster=None,
-        interval=None,
-        minimum=None,
-        maximum=None,
-        wait_count=None,
-        target_duration=None,
-        worker_key=None,
-        **kwargs,
+        cluster: Cluster | None = None,
+        interval: int | None = None,
+        minimum: int | None = None,
+        maximum: int | float | None = None,
+        wait_count: int | None = None,
+        target_duration: float | None = None,
+        worker_key: str | int | float | timedelta | None = None,
+        **kwargs: Any,
     ):
-        self.cluster = cluster
+        self.cluster: Cluster = cluster
         self.worker_key = worker_key
         self._workers_to_close_kwargs = kwargs
 
@@ -116,7 +119,7 @@ class Adaptive(AdaptiveCore):
         )
 
     @property
-    def scheduler(self):
+    def scheduler(self) -> Any:
         return self.cluster.scheduler_comm
 
     @property
@@ -186,7 +189,7 @@ class Adaptive(AdaptiveCore):
         )
 
     @log_errors
-    async def scale_down(self, workers):
+    async def scale_down(self, workers: set[str]) -> None:
         if not workers:
             return
 
@@ -203,13 +206,13 @@ class Adaptive(AdaptiveCore):
         if isawaitable(f):
             await f
 
-    async def scale_up(self, n):
+    async def scale_up(self, n: int) -> None:
         f = self.cluster.scale(n)
         if isawaitable(f):
             await f
 
     @property
-    def loop(self) -> IOLoop:
+    def loop(self) -> IOLoop | None:
         """Override Adaptive.loop"""
         if self.cluster:
             return self.cluster.loop

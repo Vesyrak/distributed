@@ -30,14 +30,14 @@ class Process(ProcessInterface):
         self.proc = None
         super().__init__(**kwargs)
 
-    async def start(self):
+    async def start(self) -> None:
         assert self.connection
         weakref.finalize(
             self, self.proc.kill
         )  # https://github.com/ronf/asyncssh/issues/112
         await super().start()
 
-    async def close(self):
+    async def close(self) -> None:
         if self.proc:
             self.proc.kill()  # https://github.com/ronf/asyncssh/issues/112
         if self.connection:
@@ -107,7 +107,7 @@ class Worker(Process):
             self.n_workers = self.kwargs.pop("n_workers", 1)
 
     @property
-    def nprocs(self):
+    def nprocs(self) -> int:
         warnings.warn(
             "The nprocs attribute will be removed in a future release. It has been "
             "renamed to n_workers.",
@@ -116,7 +116,7 @@ class Worker(Process):
         return self.n_workers
 
     @nprocs.setter
-    def nprocs(self, value):
+    def nprocs(self, value: int) -> None:
         warnings.warn(
             "The nprocs attribute will be removed in a future release. It has been "
             "renamed to n_workers.",
@@ -124,7 +124,7 @@ class Worker(Process):
         )
         self.n_workers = value
 
-    async def start(self):
+    async def start(self) -> None:
         try:
             import asyncssh  # import now to avoid adding to module startup time
         except ImportError:
@@ -222,7 +222,7 @@ class Scheduler(Process):
         self.connect_options = connect_options
         self.remote_python = remote_python or sys.executable
 
-    async def start(self):
+    async def start(self) -> None:
         try:
             import asyncssh  # import now to avoid adding to module startup time
         except ImportError:
